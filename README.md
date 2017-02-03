@@ -8,7 +8,7 @@ This is the first and only *individual* (as opposed to *team*) this semester.
 
 Term: Spring 2017
 
-+ Projec title: Lorem ipsum dolor sit amet
++ Projec title: Presidents' speech analysis
 + This project is conducted by [Yifei Tang]
 
 + Project summary: This project is aimed at analysis of the inaugspeeches of the US presidents. This project used the methods of text mining, focusing on the words analysis and topic modeling.
