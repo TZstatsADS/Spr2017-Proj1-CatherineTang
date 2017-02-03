@@ -1,0 +1,412 @@
+---
+title: "R Notebook"
+output:
+  html_document: default
+  html_notebook: default
+---
+
+
+
+# Load the data and process the text
+
+```{r, message=FALSE, warning=FALSE}
+library("wordcloud")
+library("tidytext")
+library("ggplot2")
+library("rvest")
+library("tibble")
+library("qdap")
+library("sentimentr")
+library("gplots")
+library("dplyr")
+library("tm")
+library("syuzhet")
+library("factoextra")
+library("beeswarm")
+library("scales")
+library("RColorBrewer")
+library("RANN")
+library("tm")
+library("topicmodels")
+library("reshape2")
+
+
+folder.path="../data/InauguralSpeeches/"
+speeches=list.files(path = folder.path, pattern = "*.txt")
+prez.out=substr(speeches, 6, nchar(speeches)-4)
+
+length.speeches=rep(NA, length(speeches))
+docs<-Corpus(DirSource(folder.path,encoding = "UTF-8"))
+
+docs<-tm_map(docs, stripWhitespace)
+docs<-tm_map(docs, content_transformer(tolower))
+docs<-tm_map(docs, removeNumbers)
+docs<-tm_map(docs, removeWords, stopwords("english"))
+docs<-tm_map(docs, removeWords, c("can","will","shall","nation","day","now","may","among","would","america","must","with","without","might","let","american","upon"))
+docs<-tm_map(docs, removeWords, character(0))
+docs<-tm_map(docs, removePunctuation)
+docs <- tm_map(docs,stemDocument)
+
+D<-as.data.frame(docs)
+D$docs<-paste(prez.out)
+
+
+dtm <- DocumentTermMatrix(docs)
+dtmss <- removeSparseTerms(dtm, 0.15)
+
+rownames(dtm) <- paste(prez.out)
+rowTotals <- apply(dtm , 1, sum) #Find the sum of words in each Document
+dtm  <- dtm[rowTotals> 0, ]
+dtm.mat<-as.matrix(dtm)
+dtm.df<-as.data.frame(dtm.mat)
+dtm.df<-data.frame(File=dtm$dimnames$Docs,dtm.df)
+
+library("xlsx")
+filename<-"../data/InaugurationInfo.xlsx"
+presid.info<-read.xlsx(file = filename,1,encoding="UTF-8",header=T)
+
+presid.term<-merge(presid.info,dtm.df,by="File",all=T)
+
+presid.term<-presid.term[order(presid.term$Time),] 
+
+presid.term$File <- factor(presid.term$File, levels=presid.term$File, ordered=TRUE)
+
+dtm.df<-presid.term[,-c(2,3,4,5,6)]
+dtm.mat<-as.matrix(dtm.df)
+
+
+```
+Gather the 58 speeches of the US president and process the text to the form in which we can analyze.
+
+
+```{r}
+print(R.version)
+```
+
+
+
+
+# Words Frenquency Analysis
+
+We are interested in those words that are frequently used in the inaugspeeches of the US presidents.
+
+After delete all the uncorrelated words in the text, we graph the high frequently used words as follow.
+
+```{r}
+h.freq<-findFreqTerms(dtm,lowfreq = 160)
+#length(h.freq)
+print(h.freq)
+```
+These are words shown up more than 160 times in the speeches.
+
+```{r,fig.width=8, fig.height=8}
+freq<-sort(colSums(as.matrix(dtm)),decreasing = T)
+wordcloud(names(freq),freq,max.words = length(h.freq),colors=brewer.pal(7,"Purples"),rot.per = F)
+```
+
+
+```{r,fig.width=8, fig.height=8}
+# Frequency for the high ~ words
+obj<-freq[freq >= 160]
+h.f<-data.frame(term=names(obj),freq=obj)
+
+ggplot(h.f, aes(x=term,y=freq)) + 
+             geom_bar(stat="identity",fill="Violet")+
+             labs(title="Mostly Used Words",x="Term",y="Frenquency")+
+             theme(axis.text.x  = element_text(angle=45, size=10,vjust=0.5),
+                   plot.title = element_text(colour = "black", face = "bold",size = 20,vjust = 1))+
+             geom_text(aes(label=freq), vjust=-0.2)
+
+```
+
+```{r,fig.width=8, fig.height=8}
+m1<-dtm.mat[,h.freq]
+cn<-colnames(m1)
+rn<-dtm.mat[,"File"]
+dtm.freq.mat<-matrix(as.numeric(m1),byrow=T,nrow=58)
+colnames(dtm.freq.mat)<-cn
+rownames(dtm.freq.mat)<-rn
+
+corr.freq<-cor(dtm.freq.mat)
+coln<-colnames(corr.freq)
+corr.freq<-melt(corr.freq)
+ggplot(data = corr.freq) +
+    geom_tile(aes(x = Var1, y = Var2, fill = value)) +
+    theme_classic() + 
+    theme(axis.ticks = element_blank(),
+          axis.line = element_blank(),
+          axis.text.x  = element_text(angle=45, vjust=0.5)) +
+    labs(title="Covariance between the mostly used words ",x="Words",y="Words")+
+    scale_x_discrete(labels = coln) +
+    scale_y_discrete(labels = coln) + 
+    scale_fill_gradient2('value',
+                         low = "blue", mid = "white", high = "purple")
+```
+This is the correlation heatmap of the most useds words. As color goes deeper, the correlation between the two words are more closely.
+
+As we can see "Year,World,War","Great,Govern,Hope","Power,People,Peace" are highly correlated.
+
+
+We plot the words clustering as follows:
+```{r,fig.width=8, fig.height=8}
+library(factoextra)
+set.seed(1994)
+km.res=kmeans(t(dtmss), iter.max=200,4)
+fviz_cluster(km.res, 
+             stand=T, repel= TRUE,
+             data = t(dtmss),
+             show.clust.cent=TRUE)
+```
+As we can see "People, Govern", "world,nation,hope","great,country,right" are clustered in classes.
+
+
+```{r,fig.width=8, fig.height=8}
+# Compute hierarchical clustering
+d <- dist(t(dtmss), method = "euclidean")
+res <- hcut(d, k = 4, stand = TRUE)
+fviz_dend(res, rect = TRUE, cex = 0.8,
+          k_colors = c("purple","violet","blue","skyblue"))
+```
+ 
+ 
+We plot the frequency of highly used words according to the time trend:
+```{r,fig.width=8, fig.height=8}
+# high frequency words apperence in each docs
+coln<-colnames(dtm.freq.mat)
+rown<-rownames(dtm.freq.mat)
+ggplot(data = melt(dtm.freq.mat)) +
+    geom_tile(aes(x = Var1, y = Var2, fill = value),color = "white") +
+    labs(title="Term frequence in speeches", x="Time",y="Terms")+
+    theme_classic() + 
+    theme(axis.ticks = element_blank(),
+          axis.line = element_blank(),
+          axis.text.x  = element_text(angle=60, vjust=0.5) ) +
+    scale_fill_gradient(low = "white",high = "purple")+
+    scale_x_discrete(labels =rown) +
+    scale_y_discrete(labels =coln) 
+```
+
+As we can see, "nation" is the word that appears most in some period. And this can be relate to the historical background like wars 
+
+
+```{r,fig.width=8, fig.height=8}
+# Words counting 
+ggplot(presid.term, aes(x=File,y=Words)) + 
+             geom_bar(stat="identity",fill="violet")+
+             
+             theme(axis.text.x  = element_text(angle=45, vjust=0.5))+
+             geom_text(aes(label=Words), vjust=-0.2)
+```
+ 
+```{r,fig.width=8, fig.height=8}
+library(gridExtra)
+
+a<-ggplot(presid.term,aes(x=File,y=Words,group=1))+ 
+          geom_point(aes(size=Words) ,col="violet") +
+          geom_smooth(formula=y~x,method="loess",col="blue")+
+          theme(axis.text.x  = element_text(angle=60, vjust=0.5))
+
+b<-ggplot(presid.term,aes(x=File,y=Words,group=1))+ 
+          geom_point(aes(size=Words) ,col="violet") +
+          geom_smooth(formula=y~x,method="lm",col="blue")+
+          theme(axis.text.x  = element_text(angle=60, vjust=0.5))
+grid.arrange(a,b,nrow=2)
+```
+It is easy to notice the trend that the words used in the speeches are decreasing as time went by.
+
+
+# Topic Analysis
+
+Run LDA
+
+```{r, message=FALSE, warning=FALSE}
+#Set parameters for Gibbs sampling
+burnin <- 4000
+iter <- 1000
+thin <- 500
+seed <-list(2003,5,63,100001,765)
+nstart <- 5
+best <- TRUE
+
+#Number of topics
+k <- 10
+
+#Run LDA using Gibbs sampling
+  ldaOut <-LDA(dtm, k, method="Gibbs", control=list(nstart=nstart, 
+                                                seed = seed, best=best,
+                                                burnin = burnin, iter = iter, 
+                                                thin=thin))
+#write out results
+#docs to topics
+ldaOut.topics <- as.matrix(topics(ldaOut))
+table(c(1:k, ldaOut.topics))
+write.csv(ldaOut.topics,file=paste("../output/LDAGibbs",k,"DocsToTopics.csv"))
+
+#top 6 terms in each topic
+ldaOut.terms <- as.matrix(terms(ldaOut,20))
+write.csv(ldaOut.terms,file=paste("../output/LDAGibbs",k,"TopicsToTerms.csv"))
+
+#probabilities associated with each topic assignment
+topicProbabilities <- as.data.frame(ldaOut@gamma)   
+write.csv(topicProbabilities,file=paste("../output/LDAGibbs",k,"TopicProbabilities.csv"))
+
+topic.p.mat<-as.matrix(topicProbabilities)
+
+```
+
+
+
+```{r, message=FALSE, warning=FALSE}
+terms.beta=ldaOut@beta
+terms.beta=scale(terms.beta)
+topics.terms=NULL
+for(i in 1:k){
+  topics.terms=rbind(topics.terms, ldaOut@terms[order(terms.beta[i,], decreasing = TRUE)[1:7]])
+}
+topics.terms
+ldaOut.terms
+```
+
+We can arrange the text into 10 topics and calculate the correlation between these 10 topics.
+
+
+There are some connections within the words in one topic.
+```{r,fig.width=8,fig.height=8}
+library(networkD3)
+
+networkData<-as.data.frame(ldaOut.terms)
+
+
+simpleNetwork(networkData,Source=networkData$Topic1,Target = networkData$Topic1,fontSize=15)
+simpleNetwork(networkData,Source=networkData$Topic2,Target = networkData$Topic2,fontSize=15)
+simpleNetwork(networkData,Source=networkData$Topic3,Target = networkData$Topic3,fontSize=15)
+simpleNetwork(networkData,Source=networkData$Topic4,Target = networkData$Topic4,fontSize=15)
+simpleNetwork(networkData,Source=networkData$Topic5,Target = networkData$Topic5,fontSize=15)
+simpleNetwork(networkData,Source=networkData$Topic6,Target = networkData$Topic6,fontSize=15)
+simpleNetwork(networkData,Source=networkData$Topic7,Target = networkData$Topic7,fontSize=15)
+simpleNetwork(networkData,Source=networkData$Topic8,Target = networkData$Topic8,fontSize=15)
+simpleNetwork(networkData,Source=networkData$Topic9,Target = networkData$Topic9,fontSize=15)
+simpleNetwork(networkData,Source=networkData$Topic10,Target = networkData$Topic10,fontSize=15)
+
+
+```
+
+
+
+
+
+```{r}
+topics.hash=c("Topic1","Topic2","Topic3","Topic4","Topic5","Topic6","Topic7","Topic8","Topic9","Topic10")
+
+docs$ldatopic=as.vector(ldaOut.topics)
+docs$ldahash=topics.hash[ldaOut.topics]
+colnames(topicProbabilities)=topics.hash
+docs.df=cbind(docs, topicProbabilities)
+docs.df$docs<-paste(prez.out)
+docs.df<-docs.df[presid.term$File,]
+```
+
+## Clustering of topics
+
+```{r, fig.width=8, fig.height=8}
+par(mar=c(1,1,1,1))
+topic.summary=tbl_df(docs.df)%>%
+             select(docs, Topic1:Topic10)%>%
+              
+              group_by(docs)%>%
+              summarise_each(funs(mean))
+topic.summary=as.data.frame(topic.summary)
+rownames(topic.summary)=prez.out
+
+topic.plot=c(1:length(topics.hash))
+print(topics.hash[topic.plot])
+
+heatmap.2(t(as.matrix(topic.summary[,topic.plot+1])), 
+          scale = "column", key=F, 
+         col=colorRampPalette(c("white","purple")),
+          cexRow = 0.9, cexCol = 0.9, margins = c(8, 8),
+          trace = "none", density.info = "none")
+
+
+
+```
+
+# Clustering of the presidents
+```{r, fig.width=8, fig.height=8}
+presid.summary=tbl_df(docs.df)%>%
+  #filter(type=="inaug", File%in%sel.comparison)%>%
+  select(docs, Topic1:Topic10)%>%
+  group_by(docs)%>%
+  summarise_each(funs(mean))
+
+presid.summary=as.data.frame(presid.summary)
+rownames(presid.summary)=as.character(prez.out)
+set.seed(19)
+
+km.res=kmeans(scale(presid.summary[,-1]), iter.max=200,
+              5)
+fviz_cluster(km.res, 
+             stand=T, repel= TRUE,
+             data = presid.summary[,-1],
+             show.clust.cent=FALSE)
+```
+
+# Compute hierarchical clustering
+
+```{r,fig.width=8,fig.height=8}
+set.seed(1999)
+d <- dist(dtmss, method = "euclidean")
+res <- hcut(d, k = 5, stand = TRUE)
+fviz_dend(res, rect = TRUE, cex = 0.5,
+          k_colors = c("purple","violet","blue","plum","skyblue"))
+```
+
+
+
+
+# Sentiment Analysis
+
+
+```{r, message=FALSE, warning=FALSE}
+sentence.list=NULL
+docs1<-Corpus(DirSource(folder.path,encoding = "UTF-8"))
+docs1.df<-as.data.frame(docs1)
+
+for(i in 1:nrow(docs1.df)){
+  sentences=sent_detect(docs1.df$text[i],
+                        endmarks = c("?", ".", "!", "|",";"))
+  if(length(sentences)>0){
+    emotions=get_nrc_sentiment(sentences)
+    word.count=word_count(sentences)
+    # colnames(emotions)=paste0("emo.", colnames(emotions))
+    # in case the word counts are zeros?
+    emotions=diag(1/(word.count+0.01)) %*% as.matrix(emotions)
+    sentence.list=rbind(sentence.list, 
+                        cbind(docs1.df[i,-ncol(docs1.df)],
+                              sentences=as.character(sentences),
+                              word.count,
+                              emotions,
+                              sent.id=1:length(sentences)
+                              )
+    )
+  }
+}
+```
+
+
+Sentences with extreme emotions.
+
+```{r, message=FALSE, warning=FALSE}
+speech.np=tbl_df(sentence.list)%>%
+  select(sentences, negative:positive)
+speech.np=as.data.frame(speech.np)
+
+speech.df=tbl_df(sentence.list)%>%
+  select(sentences, anger:trust)
+speech.df=as.data.frame(speech.df)
+as.character(speech.df$sentences[apply(speech.df[,-1], 2, which.max)])
+```
+
+
+# Conclusion:
+From the analysis of the speeches, we can find that the words that the president used in their inaugspeech have a lot in commom, which make sense considering the situations they were facing at that time.However, there are also some differences in the words choice due to the time background and personality.
